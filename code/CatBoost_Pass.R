@@ -231,7 +231,7 @@ catboost.save_model(catboost_model_pass,"/Users/jiangruitong/Documents/Documents
 
 library(ggplot2)
 importance_plot = ggplot(top_5_features, aes(x=reorder(Feature,SHAP),y=SHAP))+
-  geom_bar(stat="identity",fill="#f9a65a")+
+  geom_bar(stat="identity",fill="#4682b4")+
   coord_flip()+
   labs(title="Top 5 Features by SHAP Importance",
        x=" ",
@@ -245,7 +245,7 @@ importance_plot = ggplot(top_5_features, aes(x=reorder(Feature,SHAP),y=SHAP))+
         panel.background = element_rect(fill = "white", color = NA),  # Set white panel background
         plot.background = element_rect(fill = "white", color = NA))
 
-ggsave("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox/Figures/SHAPImportance_proportion.png",
+ggsave("/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/figure/SHAPImportance_proportion.png",
        plot = importance_plot,
        dpi=600,
        width=8,
