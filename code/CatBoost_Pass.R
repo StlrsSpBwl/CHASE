@@ -13,10 +13,10 @@ library(nflreadr)
 
 
 # load the fixed features
-frame_pass <- read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox/StlrsSpBwl/passFrame.csv")
-route_runner_data <- read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox/StlrsSpBwl/route_runner_feature_snapFinal.csv") %>% filter(gamePlay_Id%in%frame_pass$gamePlay_Id)
-play_ownership <- read.csv("/Users/jiangruitong/Desktop/BDB Data 2025/play_ownership.csv")
-player_gravity <- read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox/StlrsSpBwl/player_gravity.csv")
+frame_pass <- read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/processed data/model features/passFrame.csv")
+route_runner_data <- read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/processed data/model features/route_runner_feature_snapFinal.csv") %>% filter(gamePlay_Id%in%frame_pass$gamePlay_Id)
+play_ownership <- read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/processed data/model features/play_ownership.csv")
+player_gravity <- read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/processed data/model features/player_gravity.csv")
 
 
 play_ownership = play_ownership %>% 
