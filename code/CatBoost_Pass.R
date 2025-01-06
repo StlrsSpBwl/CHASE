@@ -10,39 +10,6 @@ library(skimr)
 library(purrr)
 library(nflreadr)
 
-# quick fix of features
-#route_runner_data_pass <- read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025/Sandbox/StlrsSpBwl/route_runner_feature_pass.csv") 
-#route_runner_data_snap = read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025/Sandbox/StlrsSpBwl/route_runner_feature_snapFinal.csv")
-#setwd('/Users/jiangruitong/Desktop/BDB Data 2025/nfl-big-data-bowl-2025')
-#tracking_file_names <- paste0("tracking_week_",
-                              #1:9,".csv")
-#tracking <- map_df(tracking_file_names,read_csv)
-
-#tracking_with_events = tracking %>% 
-   #mutate(gamePlay_Id = paste(gameId,playId,sep="-")) %>%
-  #select(gamePlay_Id,frameId,event,frameType) %>% 
-  #distinct(gamePlay_Id,frameId,event,frameType) %>% 
-  #filter(gamePlay_Id %in% route_runner_data_pass$gamePlay_Id) 
-
-#key_event_frameId = tracking_with_events %>% 
-  #group_by(gamePlay_Id) %>%
-  #summarise(
-    #snap_frameId = frameId[frameType=="SNAP"],
-    #pass_frameId = frameId[event %in% c("pass_forward","pass_shovel")],
-    #d_frames = pass_frameId - snap_frameId
-  #) %>% ungroup()
-
-#new_features_pass_play = route_runner_data_snap %>% 
-  #select(gamePlay_Id,y_motion_dist) %>% 
-  #distinct(gamePlay_Id,y_motion_dist) %>% 
-  #inner_join(key_event_frameId,by="gamePlay_Id") %>%
-  #select(gamePlay_Id,y_motion_dist,d_frames)
-
-#route_runner_data_pass_update = route_runner_data_pass %>% 
-  #inner_join(new_features_pass_play,by="gamePlay_Id")
-
-#write.csv(route_runner_data_pass_update,"/Users/jiangruitong/Documents/Documents Folder#/GitHub/BDB2025/Sandbox/StlrsSpBwl/route_runner_feature_passFinal.csv",row.names=FALSE)
-
 
 
 # load the fixed features
@@ -221,7 +188,6 @@ player_summary = all_features_with_results %>%
   arrange(desc(avg_goe))
 
 
-
 feature_importance = data.frame(
   Feature = colnames(all_features[,model_columns]),
   Importance = feature_importance
@@ -231,6 +197,7 @@ feature_importance = data.frame(
 shap_df= as.data.frame(feature_importance_SHAP)
 colnames(shap_df) = c(model_columns)
 mean_importance_SHAP = colMeans(abs(shap_df[,-ncol(shap_df)]))
+
 shap_importance_df = data.frame(
   Feature = model_columns,
   SHAP = mean_importance_SHAP,
@@ -240,6 +207,26 @@ shap_importance_df = data.frame(
 top_5_features = shap_importance_df %>%head(5) %>%  mutate(
 Feature=c("Distance to the closest \noutside route runner","Distance to the closest \ninside route runner","Player position","Player's yardline \nlocation","Line of scrimmage")
 ) 
+
+
+player_play_data = read.csv("/Users/jiangruitong/Desktop/BDB Data 2025/nfl-big-data-bowl-2025/player_play.csv") %>% mutate(gamePlay_Id = paste(gameId,playId,sep="-")) %>% 
+  filter(gamePlay_Id %in% all_features_with_results$gameId)
+
+route_information = player_play_data %>% 
+  select(gamePlay_Id,nflId,routeRan,inMotionAtBallSnap)
+
+key_features_result = all_features_with_results %>% 
+  select(nflId,gameId,expected_area_owned_ratio,area_owned_ratio,gravity_over_expected,y_motion_dist) %>%mutate(gamePlay_Id = gameId,
+                                                                                                             y_motion_dist = route_runner_data$y_motion_dist) %>% 
+  select(-gameId) %>% 
+  inner_join(route_information,by=c("nflId","gamePlay_Id")) %>% 
+  inner_join(player_info,by="nflId")
+
+write.csv(key_features_result,"/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/results/CatBoost_Results_PassonSnap.csv",row.names = FALSE)
+write.csv(player_summary,"/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/results/CatBoost_Player_Summary_PassonSnap.csv",row.names = FALSE)
+write.csv(shap_importance_df,"/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/results/CatBoost_Feature_Importance_PassonSnap.csv",row.names = FALSE)
+catboost_model_pass = catboost_model
+catboost.save_model(catboost_model_pass,"/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/results/CatBoost_Model_PassonSnap.cbm")
 
 
 library(ggplot2)
@@ -264,104 +251,3 @@ ggsave("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox
        width=8,
        height=6,
        units="in")
-
-ggplot(feature_importance, aes(x=reorder(Feature,Importance),y=Importance))+
-  geom_bar(stat="identity")+
-  coord_flip()+
-  labs(title="CatBoost Feature Importance (At Pass)",
-       x="Feature",
-       y="Importance")+
-  theme_minimal()
-
-player_play_data = read.csv("/Users/jiangruitong/Desktop/BDB Data 2025/nfl-big-data-bowl-2025/player_play.csv") %>% mutate(gamePlay_Id = paste(gameId,playId,sep="-")) %>% 
-  filter(gamePlay_Id %in% all_features_with_results$gameId)
-
-route_information = player_play_data %>% 
-  select(gamePlay_Id,nflId,routeRan,inMotionAtBallSnap)
-
-key_features_result = all_features_with_results %>% 
-  select(nflId,gameId,expected_area_owned_ratio,area_owned_ratio,gravity_over_expected,y_motion_dist) %>%mutate(gamePlay_Id = gameId,
-                                                                                                             y_motion_dist = route_runner_data$y_motion_dist) %>% 
-  select(-gameId) %>% 
-  inner_join(route_information,by=c("nflId","gamePlay_Id")) %>% 
-  inner_join(player_info,by="nflId")
-
-write.csv(key_features_result,"/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox/StlrsSpBwl/CatBoost Results/CatBoost_Results_PassonSnap.csv",row.names = FALSE)
-write.csv(player_summary,"/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox/StlrsSpBwl/CatBoost Results/CatBoost_Player_Summary_PassonSnap.csv",row.names = FALSE)
-write.csv(feature_importance,"/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox/StlrsSpBwl/CatBoost Results/CatBoost_Feature_Importance_PassonSnap.csv",row.names = FALSE)
-catboost_model_pass = catboost_model
-catboost.save_model(catboost_model_pass,"/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025New/Sandbox/StlrsSpBwl/CatBoost Results/CatBoost_Model_PassonSnap.cbm")
-
-# quick fix the results for the snap
-route_runner_data_snap = read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025/Sandbox/StlrsSpBwl/route_runner_feature_snapFinal.csv")
-route_runner_snap_results = read.csv("/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025/Sandbox/StlrsSpBwl/CatBoost Results/CatBoost_Results_Snap.csv")
-
-route_runner_snap_results = route_runner_snap_results %>% 
-  mutate(y_motion_dist = route_runner_data_snap$y_motion_dist)
-write.csv(route_runner_snap_results,"/Users/jiangruitong/Documents/Documents Folder/GitHub/BDB2025/Sandbox/StlrsSpBwl/CatBoost Results/CatBoost_Results_Snap.csv",row.names = FALSE)
-
-
-ggplot(key_features_result,aes(x=gravity_over_expected))+
-  geom_histogram(bins=30,fill="blue",color="black")+
-  labs(title="Distribution of GOE, based on snap features",
-       x="GOE",
-       y="Frequency")
-
-
-ggplot(pass_features_catboost_results,aes(x=gravity_over_expected))+
-  geom_histogram(bins=30,fill="blue",color="black")+
-  labs(title="Distribution of GOE, based on pass features",
-       x="GOE",
-       y="Frequency")
-
-
-# weird play
-weird_play = key_features_result %>% 
-  filter(gravity_over_expected>250) %>% 
-  distinct(gamePlay_Id)
-
-weird_play_description = read.csv("/Users/jiangruitong/Desktop/BDB Data 2025/nfl-big-data-bowl-2025/plays.csv") %>% mutate(gamePlay_Id = paste(gameId,playId,sep="-")) %>%
-  filter(gamePlay_Id %in% weird_play$gamePlay_Id)
-
-# now look at residuals as a function of d frames
-residuals = key_features_result %>% 
-  select(gravity_over_expected) %>% 
-  mutate(d_frames = pass_features_catboost_results$d_frames)
-
-# generate the scatter plot of residuals and time til pass with the regression lines
-
-# Perform correlation test
-cor_test <- cor.test(residuals$d_frames, residuals$gravity_over_expected, use = "complete.obs")
-
-# Extract the correlation coefficient and p-value
-correlation <- cor_test$estimate
-p_value <- cor_test$p.value
-
-# Add the correlation and p-value to the plot
-ggplot(residuals, aes(x = d_frames, y = gravity_over_expected)) +
-  geom_point() +
-  geom_smooth(method = "lm", color = "blue") +
-  labs(
-    title = "Residuals vs. Time til Pass",
-    x = "Time til Pass",
-    y = "Residuals"
-  ) +
-  annotate(
-    "text",
-    x = Inf, y = Inf,
-    label = paste0(
-      "Correlation: ", round(correlation, 2), 
-      "\nP-value: ", signif(p_value, 3)
-    ),
-    hjust = 1.1, vjust = 1.5,
-    size = 5,
-    color = "red"
-  )
-
-# get the residual for actual number == 0 and actual number non zero
-residuals_actual_zero = key_features_result %>% 
-  filter(area_owned==0) %>% 
-  select(gravity_over_expected)
-residual_actual_non_zero = key_features_result %>% 
-  filter(area_owned!=0) %>% 
-  select(gravity_over_expected)
