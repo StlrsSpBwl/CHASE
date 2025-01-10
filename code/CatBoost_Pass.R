@@ -151,8 +151,6 @@ test_predictions = catboost.predict(catboost_model, test_pool)
 test_rmse = sqrt(mean((test_predictions - test_data$area_owned)^2))
 print(paste("Test RMSE with optimized hyperparameters:", test_rmse))
 
-# get the RMSE of the model using the pass time features
-
 
 
 # now we calculate the expected area owned for each player in each play
@@ -163,36 +161,8 @@ prediction_pool = catboost.load_pool(
   cat_features = which(colnames(all_features) %in% categorical_features)
 )
 
-feature_importance = catboost.get_feature_importance(catboost_model,prediction_pool)
 feature_importance_SHAP = catboost.get_feature_importance(catboost_model,prediction_pool,type="ShapValues")
 
-all_features_with_results = all_features %>% 
-  mutate(expected_area_owned_ratio = catboost.predict(catboost_model, prediction_pool),
-         gravity_over_expected = area_owned_ratio - expected_area_owned_ratio,
-         nflId = route_runner_data$nflId,
-         gameId = route_runner_data$gamePlay_Id) %>% 
-  select(-position) %>% 
-  inner_join(player_info,by=c("nflId"))
-
-
-
-player_summary = all_features_with_results %>% 
-  group_by(nflId,displayName,position) %>% 
-  summarise(
-    avg_goe = mean(gravity_over_expected,na.rm=TRUE),
-    std_goe = sd(gravity_over_expected,na.rm=TRUE),
-    avg_error = mean(abs(gravity_over_expected),na.rm=TRUE),
-    n_plays = n()
-  ) %>% 
-  filter(n_plays>=50) %>% 
-  arrange(desc(avg_goe))
-
-
-feature_importance = data.frame(
-  Feature = colnames(all_features[,model_columns]),
-  Importance = feature_importance
-) %>% 
-  arrange(desc(Importance))
 
 shap_df= as.data.frame(feature_importance_SHAP)
 colnames(shap_df) = c(model_columns)
@@ -208,27 +178,11 @@ top_5_features = shap_importance_df %>%head(5) %>%  mutate(
 Feature=c("Distance to the closest \noutside route runner","Distance to the closest \ninside route runner","Player position","Player's yardline \nlocation","Line of scrimmage")
 ) 
 
-
-player_play_data = read.csv("/Users/jiangruitong/Desktop/BDB Data 2025/nfl-big-data-bowl-2025/player_play.csv") %>% mutate(gamePlay_Id = paste(gameId,playId,sep="-")) %>% 
-  filter(gamePlay_Id %in% all_features_with_results$gameId)
-
-route_information = player_play_data %>% 
-  select(gamePlay_Id,nflId,routeRan,inMotionAtBallSnap)
-
-key_features_result = all_features_with_results %>% 
-  select(nflId,gameId,expected_area_owned_ratio,area_owned_ratio,gravity_over_expected,y_motion_dist) %>%mutate(gamePlay_Id = gameId,
-                                                                                                             y_motion_dist = route_runner_data$y_motion_dist) %>% 
-  select(-gameId) %>% 
-  inner_join(route_information,by=c("nflId","gamePlay_Id")) %>% 
-  inner_join(player_info,by="nflId")
-
-write.csv(key_features_result,"/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/results/CatBoost_Results_PassonSnap.csv",row.names = FALSE)
-write.csv(player_summary,"/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/results/CatBoost_Player_Summary_PassonSnap.csv",row.names = FALSE)
 write.csv(shap_importance_df,"/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/results/CatBoost_Feature_Importance_PassonSnap.csv",row.names = FALSE)
 catboost_model_pass = catboost_model
 catboost.save_model(catboost_model_pass,"/Users/jiangruitong/Documents/Documents Folder/GitHub/CHASE/results/CatBoost_Model_PassonSnap.cbm")
 
-
+# Generate plot for features importance quantify by SHAP
 library(ggplot2)
 importance_plot = ggplot(top_5_features, aes(x=reorder(Feature,SHAP),y=SHAP))+
   geom_bar(stat="identity",fill="#4682b4")+
