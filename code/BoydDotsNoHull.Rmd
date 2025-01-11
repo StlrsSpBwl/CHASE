@@ -1,0 +1,264 @@
+---
+title: "BoydDotsNoHull.Rmd"
+author: "James Lauer"
+date: "2025-01-05"
+output: gif
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load the tracking data
+```{r}
+library(tidyverse)
+library(dplyr)
+library(janitor)
+library(skimr)
+library(ggplot2)
+library(purrr)
+library(nflreadr)
+setwd('/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025')
+games_data <- read.csv("games.csv")
+plays_data <- read.csv("plays.csv")
+players_data <- read.csv("players.csv")
+player_play_data <- read.csv("player_play.csv")
+tracking_file_names <- paste0("tracking_week_",
+                              1:8,".csv") # Can shorten for easy compute
+tracking <- map_df(tracking_file_names,read_csv)
+```
+```{r}
+arrow::write_parquet(tracking, "/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025/tracking.parquet")
+```
+
+## Make the Field
+```{r}
+library(sportyR)
+field_params <- list(field_apron = "springgreen3",
+                     field_border = "springgreen3",
+                     offensive_endzone = "springgreen3",
+                     defensive_endzone = "springgreen3",
+                     offensive_half = "springgreen3",
+                     defensive_half = "springgreen3")
+nfl_field <- geom_football(league = "nfl",
+                           display_range = "in_bounds_only",
+                           x_trans = 60,
+                           y_trans = 26.6667,
+                           xlims = c(0, 120),
+                           color_updates = field_params)
+nfl_field
+
+
+```
+
+
+## Correct the tracking data
+```{r}
+BoydGame <- 2022102302
+BoydPlay <- 141
+trackingBoydPlay <- tracking %>% 
+    filter(gameId == BoydGame, playId == BoydPlay) %>%
+    mutate(
+    # make all plays go from left to right
+    x = ifelse(playDirection == "left",120-x,x),
+    y = ifelse(playDirection == "left",160/3-y,
+               y),
+    dir = ifelse(playDirection == "left",dir+180,
+                 dir),
+    dir = ifelse(dir>360,dir-360,dir),
+    o = ifelse(playDirection == "left",o+180,o),
+    o = ifelse(o>360,o-360,o),dir_rad = pi*(dir/180),
+        # get orientation and direction in x and y direction
+        # NA checks are for the ball
+        dir_x = ifelse(is.na(dir),NA_real_,sin(dir_rad)),
+        dir_y = ifelse(is.na(dir),NA_real_,cos(dir_rad)),
+        # Get directional speed/velo
+        s_x = dir_x * s,
+        s_y = dir_y*s,
+        # Get directional acceleration
+        a_x = dir_x *a,
+        a_y = dir_y*a,
+        # Concatenate playID and gameID
+        gamePlay_Id = paste(gameId,playId,sep="-")) %>% 
+    group_by(gamePlay_Id) %>%
+    mutate(
+        # Get the frame number of the snap
+        snap_frame = ifelse(any(frameType == "SNAP"), first(frameId[frameType == "SNAP"]), NA),
+        # Get the frame number relative to the snap
+        relative_frame = frameId - snap_frame
+    ) %>% ungroup() %>% dplyr::select(-snap_frame)
+
+
+```
+
+```{r}
+library(tidyverse)
+library(gganimate)
+library(sp)
+library(geometry)
+library(tidyverse)
+library(gganimate)
+library(sp)
+library(geometry)
+
+# Define distinct colors globally
+distinct_colors <- c("#FF0000", "darkolivegreen", "#0000FF", "#FFD700", "purple", "darkorange")
+
+calculate_ownership_discrete <- function(frame_data, hull_points, player_play_data) {
+  # Get route runners dynamically using player_play_data
+  current_gamePlayId <- paste0(frame_data$gameId[1], "-", frame_data$playId[1])
+  
+  route_runners <- frame_data %>%
+    inner_join(
+      player_play_data %>%
+        filter(wasRunningRoute == 1) %>%
+        mutate(gamePlayId = paste(gameId, playId, sep="-")) %>%
+        filter(gamePlayId == current_gamePlayId),
+      by = "nflId"
+    ) %>%
+    select(nflId, x, y, displayName)
+  
+  if (nrow(route_runners) == 0 || is.null(hull_points)) {
+    return(NULL)
+  }
+  
+  # Create grid within hull
+  grid_size <- 50
+  x_range <- seq(min(hull_points$x), max(hull_points$x), length.out = grid_size)
+  y_range <- seq(min(hull_points$y), max(hull_points$y), length.out = grid_size)
+  grid_points <- expand.grid(x = x_range, y = y_range)
+  
+  # Check which points are inside hull
+  hull_matrix <- as.matrix(hull_points)
+  in_hull <- point.in.polygon(grid_points$x, grid_points$y,
+                             hull_matrix[,1], hull_matrix[,2])
+  grid_points <- grid_points[in_hull == 1,]
+  
+  if (nrow(grid_points) == 0) {
+    return(NULL)
+  }
+  
+  # Calculate distances to each route runner
+  distances <- matrix(NA, nrow = nrow(grid_points), ncol = nrow(route_runners))
+  for(i in 1:nrow(grid_points)) {
+    for(j in 1:nrow(route_runners)) {
+      distances[i,j] <- sqrt((grid_points$x[i] - route_runners$x[j])^2 + 
+                            (grid_points$y[i] - route_runners$y[j])^2)
+    }
+  }
+  
+  # Assign each grid point to nearest route runner
+  grid_points$owner <- apply(distances, 1, which.min)
+  
+  # Create color mapping for the number of route runners in this frame
+  color_mapping <- distinct_colors[1:nrow(route_runners)]
+  
+  # Convert to tibble and add necessary columns
+  result <- tibble(
+    frameId = frame_data$frameId[1],
+    x = grid_points$x,
+    y = grid_points$y,
+    owner = grid_points$owner,
+    color = color_mapping[grid_points$owner]
+  )
+  
+  return(result)
+}
+
+
+```
+
+
+```{r animation_demo, fig.retina=3, fig.path="/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025/"}
+visualize_routes <- function(tracking_data, player_play_data, plays_data) {
+  # Get current play info
+  current_gameId <- tracking_data$gameId[1]
+  current_playId <- tracking_data$playId[1]
+  current_gamePlayId <- paste0(current_gameId, "-", current_playId)
+  
+  # Get team information for current play
+  play_info <- plays_data %>%
+    filter(gameId == current_gameId, playId == current_playId) %>%
+    select(possessionTeam, defensiveTeam)
+  
+  # Get route runners for this play
+  route_runners_data <- player_play_data %>%
+    filter(wasRunningRoute == 1) %>%
+    mutate(gamePlayId = paste(gameId, playId, sep="-")) %>%
+    filter(gamePlayId == current_gamePlayId)
+  
+  # Create color mapping for route runners
+  distinct_colors <- c("#FF0000", "darkolivegreen", "#0000FF", "#FFD700", "purple", "darkorange")
+  player_colors <- tibble(
+    nflId = route_runners_data$nflId,
+    player_color = distinct_colors[1:nrow(route_runners_data)]
+  )
+  
+  # Update tracking data with matched colors
+  tracking_data <- tracking_data %>%
+    left_join(player_colors, by = "nflId") %>%
+    mutate(
+      pt_color = case_when(
+        nflId %in% route_runners_data$nflId ~ player_color,
+        club == play_info$possessionTeam ~ "white",
+        club == play_info$defensiveTeam ~ "black",
+        club == "football" ~ "#654321",
+        TRUE ~ "white"
+      )
+    )
+  
+ route_runners <- tracking_data %>%
+    filter(nflId %in% route_runners_data$nflId) %>%
+    select(nflId, displayName) %>%
+    distinct() %>%
+    left_join(player_colors, by = "nflId") %>%
+    mutate(
+        x = 15,  # Single fixed x position for all names
+        y = seq(30, 50, length.out = n()),  # Spread names vertically from 40 to 48 yards
+        color = player_color
+    
+    )
+  
+  # Create base plot with rotated text
+  p <- nfl_field +
+    geom_point(data = tracking_data,
+               aes(x, y),
+               size = 0.75,
+               color = tracking_data$pt_color) +
+    geom_text(data = route_runners,
+          aes(x = x, y = y, label = displayName),
+          color = route_runners$color,
+          hjust = 0,           # Align text to the left
+          vjust = 0.5,         # Center text vertically
+          angle = 0,
+          size = 1.75,
+          check_overlap = TRUE # Prevent text overlap
+) +
+    transition_time(frameId)
+  
+  return(p)
+}
+
+# Usage:
+p <- visualize_routes(
+  tracking_data = trackingBoydPlay,
+  player_play_data = player_play_data,
+  plays_data = plays_data
+)
+
+# Animate with high quality settings
+animate(p, 
+       nframes = length(unique(trackingBoydPlay$frameId)),
+       fps = 10,
+       width = 1980/4,    # Full HD width
+       height = 1080/4,   # Full HD height
+       res = 200,       # High DPI
+       renderer = gifski_renderer(loop = TRUE))
+
+# Save animation
+anim_save("route_visualization_HD.gif", 
+          animation = last_animation(),
+          loop = TRUE,
+          path = "/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025/")
+```
+
