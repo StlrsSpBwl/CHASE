@@ -1,0 +1,477 @@
+---
+title: "BoydPlayTimeSeriesCHASEProp"
+author: "James Lauer"
+date: "2025-01-05"
+output: gif
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load the tracking data
+```{r}
+library(tidyverse)
+library(dplyr)
+library(janitor)
+library(skimr)
+library(ggplot2)
+library(purrr)
+library(nflreadr)
+setwd('/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025')
+games_data <- read.csv("games.csv")
+plays_data <- read.csv("plays.csv")
+players_data <- read.csv("players.csv")
+player_play_data <- read.csv("player_play.csv")
+tracking_file_names <- paste0("tracking_week_",
+                              1:8,".csv") # Can shorten for better compute
+tracking <- map_df(tracking_file_names,read_csv)
+```
+```{r}
+arrow::write_parquet(tracking, "/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025/tracking.parquet")
+```
+
+## Make the Field
+```{r}
+library(sportyR)
+field_params <- list(field_apron = "springgreen3",
+                     field_border = "springgreen3",
+                     offensive_endzone = "springgreen3",
+                     defensive_endzone = "springgreen3",
+                     offensive_half = "springgreen3",
+                     defensive_half = "springgreen3")
+nfl_field <- geom_football(league = "nfl",
+                           display_range = "in_bounds_only",
+                           x_trans = 60,
+                           y_trans = 26.6667,
+                           xlims = c(0, 120),
+                           color_updates = field_params)
+nfl_field
+
+
+```
+
+
+## Correct the tracking data
+```{r}
+BoydGame = 2022102302
+BoydPlay = 141
+trackingBoydPlay <- tracking %>% 
+    filter(gameId == BoydGame, playId == BoydPlay) %>%
+    mutate(
+    # make all plays go from left to right
+    x = ifelse(playDirection == "left",120-x,x),
+    y = ifelse(playDirection == "left",160/3-y,
+               y),
+    dir = ifelse(playDirection == "left",dir+180,
+                 dir),
+    dir = ifelse(dir>360,dir-360,dir),
+    o = ifelse(playDirection == "left",o+180,o),
+    o = ifelse(o>360,o-360,o),dir_rad = pi*(dir/180),
+        # get orientation and direction in x and y direction
+        # NA checks are for the ball
+        dir_x = ifelse(is.na(dir),NA_real_,sin(dir_rad)),
+        dir_y = ifelse(is.na(dir),NA_real_,cos(dir_rad)),
+        # Get directional speed/velo
+        s_x = dir_x * s,
+        s_y = dir_y*s,
+        # Get directional acceleration
+        a_x = dir_x *a,
+        a_y = dir_y*a,
+        # Concatenate playID and gameID
+        gamePlay_Id = paste(gameId,playId,sep="-")) %>% 
+    group_by(gamePlay_Id) %>%
+    mutate(
+        # Get the frame number of the snap
+        snap_frame = ifelse(any(frameType == "SNAP"), first(frameId[frameType == "SNAP"]), NA),
+        # Get the frame number relative to the snap
+        relative_frame = frameId - snap_frame
+    ) %>% ungroup() %>% dplyr::select(-snap_frame)
+
+
+```
+
+```{r}
+library(tidyverse)
+library(gganimate)
+library(sp)
+library(geometry)
+library(tidyverse)
+library(gganimate)
+library(sp)
+library(geometry)
+
+# Define distinct colors globally
+distinct_colors <- c("#FF0000", "darkolivegreen", "#0000FF", "#FFD700", "purple", "darkorange")
+
+calculate_ownership_discrete <- function(frame_data, hull_points, player_play_data) {
+  # Get route runners dynamically using player_play_data
+  current_gamePlayId <- paste0(frame_data$gameId[1], "-", frame_data$playId[1])
+  
+  route_runners <- frame_data %>%
+    inner_join(
+      player_play_data %>%
+        filter(wasRunningRoute == 1) %>%
+        mutate(gamePlayId = paste(gameId, playId, sep="-")) %>%
+        filter(gamePlayId == current_gamePlayId),
+      by = "nflId"
+    ) %>%
+    select(nflId, x, y, displayName)
+  
+  if (nrow(route_runners) == 0 || is.null(hull_points)) {
+    return(NULL)
+  }
+  
+  # Create grid within hull
+  grid_size <- 50
+  x_range <- seq(min(hull_points$x), max(hull_points$x), length.out = grid_size)
+  y_range <- seq(min(hull_points$y), max(hull_points$y), length.out = grid_size)
+  grid_points <- expand.grid(x = x_range, y = y_range)
+  
+  # Check which points are inside hull
+  hull_matrix <- as.matrix(hull_points)
+  in_hull <- point.in.polygon(grid_points$x, grid_points$y,
+                             hull_matrix[,1], hull_matrix[,2])
+  grid_points <- grid_points[in_hull == 1,]
+  
+  if (nrow(grid_points) == 0) {
+    return(NULL)
+  }
+  
+  # Calculate distances to each route runner
+  distances <- matrix(NA, nrow = nrow(grid_points), ncol = nrow(route_runners))
+  for(i in 1:nrow(grid_points)) {
+    for(j in 1:nrow(route_runners)) {
+      distances[i,j] <- sqrt((grid_points$x[i] - route_runners$x[j])^2 + 
+                            (grid_points$y[i] - route_runners$y[j])^2)
+    }
+  }
+  
+  # Assign each grid point to nearest route runner
+  grid_points$owner <- apply(distances, 1, which.min)
+  
+  # Create color mapping for the number of route runners in this frame
+  color_mapping <- distinct_colors[1:nrow(route_runners)]
+  
+  # Convert to tibble and add necessary columns
+  result <- tibble(
+    frameId = frame_data$frameId[1],
+    x = grid_points$x,
+    y = grid_points$y,
+    owner = grid_points$owner,
+    color = color_mapping[grid_points$owner]
+  )
+  
+  return(result)
+}
+
+
+```
+
+
+```{r}
+visualize_route_ownership <- function(tracking_data, player_play_data, plays_data, non_pass_rusher_data) {
+  # Get current play info
+  current_gameId <- tracking_data$gameId[1]
+  current_playId <- tracking_data$playId[1]
+  current_gamePlayId <- paste0(current_gameId, "-", current_playId)
+  
+  # Get team information for current play
+  play_info <- plays_data %>%
+    filter(gameId == current_gameId, playId == current_playId) %>%
+    select(possessionTeam, defensiveTeam)
+  
+  route_runners_data <- player_play_data %>%
+    filter(wasRunningRoute == 1) %>%
+    mutate(gamePlayId = paste(gameId, playId, sep="-")) %>%
+    filter(gamePlayId == current_gamePlayId)
+  
+  # Create color mapping based on number of route runners
+  num_runners <- nrow(route_runners_data)
+  distinct_colors <- c("#FF0000", "darkolivegreen", "#0000FF", "#FFD700", "purple", "darkorange")
+  player_colors <- tibble(
+    nflId = route_runners_data$nflId,
+    player_color = distinct_colors[1:num_runners]
+  )
+  
+  # Update tracking data with matched colors for route runners
+  tracking_data <- tracking_data %>%
+    left_join(player_colors, by = "nflId") %>%
+    mutate(
+      pt_color = case_when(
+        nflId %in% route_runners_data$nflId ~ player_color,
+        club == play_info$possessionTeam ~ "white",
+        club == play_info$defensiveTeam ~ "black",
+        club == "football" ~ "#654321",
+        TRUE ~ "white"
+      )
+    )
+  
+  # Process all frames
+  frames <- unique(tracking_data$frameId)
+  all_ownership_data <- map_dfr(frames, function(f) {
+    frame_data <- tracking_data %>% filter(frameId == f)
+    hull_points <- calculate_frame_hull(frame_data, non_pass_rusher_data, play_info$defensiveTeam)
+    if (!is.null(hull_points)) {
+      ownership <- calculate_ownership_discrete(frame_data, hull_points, player_play_data)
+      return(ownership)
+    }
+    return(NULL)
+  })
+  
+      # Get route runner information for legend
+  route_runners <- tracking_data %>%
+    filter(nflId %in% route_runners_data$nflId) %>%
+    select(nflId, displayName) %>%
+    distinct() %>%
+    left_join(player_colors, by = "nflId") %>%
+    mutate(
+      x = seq(5, by = 3, length.out = n()),  # Space out x positions
+      y = 45,  # Lower y position to show full names
+      color = player_color
+    )
+  
+  # Create base plot with rotated text
+  p <- nfl_field +
+    geom_point(data = all_ownership_data,
+               aes(x, y),
+               color = all_ownership_data$color,
+               alpha = 0.1,
+               size = 2) +
+    geom_point(data = tracking_data,
+               aes(x, y),
+               size = 3,
+               color = tracking_data$pt_color) +
+    geom_text(data = route_runners,
+              aes(x = x, y = y, label = displayName),
+              color = route_runners$color,
+              hjust = 0.5,  # Center the text at rotation point
+              angle = 270,  # Rotate 270 degrees counterclockwise
+              size = 4) +
+    transition_time(frameId)
+  
+  return(p)
+}
+```
+
+
+```{r animation_demo, fig.retina=3, fig.path="/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025/"}
+# Create the non_pass_rusher dataframe
+non_pass_rusher <- player_play_data %>%
+  filter(is.na(wasInitialPassRusher) | wasInitialPassRusher == FALSE) %>%  # Filter for non-pass rushers
+  mutate(gamePlayId = paste(gameId, playId, sep="-"))  # Create consistent gamePlayId format
+
+# Update the tracking data preparation to properly identify defensive players
+trackingBoydPlay <- tracking %>% 
+    filter(gameId == BoydGame, playId == BoydPlay) %>%
+    mutate(
+      # make all plays go from left to right
+      x = ifelse(playDirection == "left", 120-x, x),
+      y = ifelse(playDirection == "left", 160/3-y, y),
+      dir = ifelse(playDirection == "left", dir+180, dir),
+      dir = ifelse(dir>360, dir-360, dir),
+      o = ifelse(playDirection == "left", o+180, o),
+      o = ifelse(o>360, o-360, o),
+      dir_rad = pi*(dir/180),
+      dir_x = ifelse(is.na(dir), NA_real_, sin(dir_rad)),
+      dir_y = ifelse(is.na(dir), NA_real_, cos(dir_rad)),
+      s_x = dir_x * s,
+      s_y = dir_y * s,
+      a_x = dir_x * a,
+      a_y = dir_y * a,
+      gamePlayId = paste(gameId, playId, sep="-")  # Consistent gamePlayId format
+    ) %>%
+    # Join with player_play data to identify non-pass rushers
+    left_join(
+      non_pass_rusher %>% 
+        select(gamePlayId, nflId),
+      by = c("gamePlayId", "nflId")
+    )
+
+# Update calculate_frame_hull function to use defensive team parameter
+calculate_frame_hull <- function(frame_data, non_pass_rusher_data, defensive_team) {
+  current_gamePlayId <- paste0(frame_data$gameId[1], "-", frame_data$playId[1])
+  
+  non_pass_rusher_ids <- non_pass_rusher_data %>%
+    filter(gamePlayId == current_gamePlayId) %>%
+    pull(nflId)
+  
+  def_points <- frame_data %>%
+    filter(club == defensive_team & nflId %in% non_pass_rusher_ids) %>%
+    select(x, y)
+  
+  if (nrow(def_points) >= 3) {
+    hull_coords <- def_points %>%
+      as.matrix() %>%
+      chull()
+    
+    hull_points <- def_points[c(hull_coords), ]
+    return(hull_points)
+  }
+  return(NULL)
+}
+
+
+```
+
+
+```{r animation_demo, fig.retina=3, fig.path="/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025/"}
+# Function to calculate proportional area of ownership for each player at each frame
+calculate_player_proportions <- function(frame_data, player_play_data, non_pass_rusher_data) {
+  current_gameId <- frame_data$gameId[1]
+  current_playId <- frame_data$playId[1]
+  current_gamePlayId <- paste0(current_gameId, "-", current_playId)
+
+  # Get route runners for this play and assign colors in order
+  route_runners <- player_play_data %>%
+    filter(wasRunningRoute == 1) %>%
+    mutate(gamePlayId = paste(gameId, playId, sep = "-")) %>%
+    filter(gamePlayId == current_gamePlayId) %>%
+    select(nflId) %>%
+    mutate(color = distinct_colors[row_number()])
+
+  areas_by_frame <- data.frame()
+
+  for (f in unique(frame_data$frameId)) {
+    frame_data_subset <- frame_data %>% filter(frameId == f)
+
+    hull_points <- calculate_frame_hull(
+      frame_data_subset, non_pass_rusher_data,
+      plays_data %>%
+        filter(gameId == current_gameId, playId == current_playId) %>%
+        pull(defensiveTeam)
+    )
+
+    if (!is.null(hull_points)) {
+      ownership <- calculate_ownership_discrete(frame_data_subset, hull_points, player_play_data)
+
+      if (!is.null(ownership)) {
+        # Calculate areas and proportions
+        frame_areas <- ownership %>%
+          group_by(owner) %>%
+          summarise(
+            grid_points = n(),
+            .groups = "drop"
+          ) %>%
+          mutate(
+            total_points = sum(grid_points),
+            proportion = grid_points / total_points # Calculate proportion
+          ) %>%
+          left_join(
+            route_runners %>%
+              mutate(owner = row_number()),
+            by = "owner"
+          ) %>%
+          mutate(
+            frameId = f,
+            seconds = (f - min(frame_data$frameId)) / 10
+          )
+
+        areas_by_frame <- bind_rows(areas_by_frame, frame_areas)
+      }
+    }
+  }
+
+  # Join with frame_data to get displayName
+  areas_by_frame <- areas_by_frame %>%
+    left_join(
+      frame_data %>%
+        select(nflId, displayName) %>%
+        distinct(),
+      by = "nflId"
+    )
+
+  return(areas_by_frame)
+}
+
+# Calculate proportional areas
+player_proportions <- calculate_player_proportions(trackingBoydPlay, player_play_data, non_pass_rusher)
+
+# Get event frames
+snap_frame <- trackingBoydPlay %>%
+  filter(event == "ball_snap") %>%
+  pull(frameId) %>%
+  first()
+
+pass_frame <- trackingBoydPlay %>%
+  filter(event == "pass_forward") %>%
+  pull(frameId) %>%
+  first()
+
+catch_frame <- trackingBoydPlay %>%
+  filter(event == "pass_outcome_caught") %>%
+  pull(frameId) %>%
+  first()
+
+# Convert to seconds
+snap_second <- (snap_frame - min(trackingBoydPlay$frameId)) / 10
+pass_second <- (pass_frame - min(trackingBoydPlay$frameId)) / 10
+catch_second <- (catch_frame - min(trackingBoydPlay$frameId)) / 10
+
+# Create the time series plot with proportions
+timeseries_plot <- ggplot(
+  player_proportions,
+  aes(x = seconds, y = proportion, color = displayName, group = nflId)
+) +
+  # Add event lines
+  geom_vline(xintercept = snap_second, color = "grey70", linetype = "dashed", size = 0.8) +
+  geom_vline(xintercept = pass_second, color = "grey70", linetype = "dashed", size = 0.8) +
+  geom_vline(xintercept = catch_second, color = "grey70", linetype = "dashed", size = 0.8) +
+  # Add event labels
+  annotate("text",
+    x = snap_second, y = 1,
+    label = "Snap", hjust = -0.2, vjust = 1, color = "grey40", size = 4
+  ) +
+  annotate("text",
+    x = pass_second, y = 1,
+    label = "Pass", hjust = -0.2, vjust = 2.2, color = "grey40", size = 4
+  ) +
+  annotate("text",
+    x = catch_second, y = 1,
+    label = "Catch", hjust = -0.2, vjust = 3.4, color = "grey40", size = 4
+  ) +
+  geom_line(size = 1) +
+  scale_color_manual(
+    values = distinct_colors[1:length(unique(player_proportions$nflId))],
+    breaks = player_proportions %>%
+      select(displayName, color) %>%
+      distinct() %>%
+      arrange(match(color, distinct_colors)) %>%
+      pull(displayName)
+  ) +
+  scale_y_continuous(limits = c(0, 1), labels = scales::label_percent(scale = 100)) +
+  labs(
+    title = "Proportion of CHASE over Time",
+    x = "Time (seconds)",
+    y = "Proportion of CHASE Owned",
+    color = "Player"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10)
+  ) +
+  transition_reveal(seconds)
+
+
+
+# Animate the combined plot
+animate(timeseries_plot,
+  nframes = length(unique(trackingBoydPlay$frameId)),
+  fps = 10,
+  width = 640,
+  height = 405,
+  res = 100,
+  renderer = gifski_renderer(loop = TRUE)
+)
+
+# Save the combined animation
+anim_save("route_ownership_proportional_with_timeseries.gif",
+  animation = last_animation(),
+  path = "/Users/jameslauer/Desktop/BDB/BDB2025/nfl-big-data-bowl-2025/"
+)
+
+```
